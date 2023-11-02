@@ -59,8 +59,8 @@ _, CAPTURE_FILE, FILEPREFIX, MAX_BLOCKS_STR = sys.argv[:4]
 MAX_BLOCKS = int(MAX_BLOCKS_STR)
 
 def numpySave(array, file):
-    np.array([array.ndim], dtype=np.int32).tofile(file)
-    np.array(array.shape, dtype=np.int32).tofile(file)
+    np.array([array.ndim], dtype=np.int).tofile(file)
+    np.array(array.shape, dtype=np.int).tofile(file)
     dt = array.dtype.descr[0][1][1:3].encode('ascii')
     file.write(dt)
     array.tofile(file)
@@ -84,9 +84,10 @@ class CaptureScraper():
             elif draw.name.startswith(first_call_prefix):
                 has_batch_started = True
                 if draw.name.startswith(drawcall_prefix):
+                    print(f"Matching: {draw.name}, to {drawcall_prefix}")
                     batch.append(draw)
             else:
-                print(f"Not relevant yet: {draw.name}")
+                print(f"Not relevant yet: {draw.name}, looking for {drawcall_prefix}")
         return batch, last_call_index
 
     def getVertexShaderConstants(self, draw, state=None):
@@ -120,7 +121,7 @@ class CaptureScraper():
                         memval = 0
                         if member.type == rd.VarType.Float:
                             memval = member.value.f32v[:member.rows * member.columns]
-                        elif member.type == rd.VarType.Int:
+                        elif member.type == rd.VarType.SInt:
                             memval = member.value.s32v[:member.rows * member.columns]
                         else:
                             print("Unsupported type!")
@@ -129,7 +130,7 @@ class CaptureScraper():
                 else:
                     if var.type == rd.VarType.Float:
                         val = var.value.f32v[:var.rows * var.columns]
-                    elif var.type == rd.VarType.Int:
+                    elif var.type == rd.VarType.SInt:
                         val = var.value.s32v[:var.rows * var.columns]
                     else:
                         print("Unsupported type!")
@@ -142,7 +143,7 @@ class CaptureScraper():
         constants = self.getVertexShaderConstants(draw)
         return uniform in constants['$Globals']
 
-    def extractRelevantCalls(self, drawcalls, _strategy=4):
+    def extractRelevantCalls(self, drawcalls, _strategy=9):
         """List the drawcalls related to drawing the 3D meshes thank to a ad hoc heuristic
         It may different in RenderDoc UI and in Python module, for some reason
         """
@@ -190,40 +191,53 @@ class CaptureScraper():
             first_call = "" # Try from the beginning on
             last_call = "Draw()"
             drawcall_prefix = "DrawIndexed"
+        elif _strategy == 9:
+            # In OneMap3D we are looking for the 4th batch of DrawIndexed calls
+            first_call = "DrawIndexed"
+            last_call = ""
+            drawcall_prefix = "DrawIndexed"
+            capture_type = "OneMap"
             min_drawcall = 0
-            while True:
+            iteration = 0
+            while iteration < 2:
                 skipped_drawcalls, new_min_drawcall = self.findDrawcallBatch(drawcalls[min_drawcall:], first_call, drawcall_prefix, last_call)
-                if not skipped_drawcalls or self.hasUniform(skipped_drawcalls[0], "_w"):
-                    break
                 min_drawcall += new_min_drawcall
+                iteration += 1
+
+            print("Strategy 9 finished matching")
         else:
             print("Error: Could not find the beginning of the relevant 3D draw calls")
             return [], "none"
 
-        print(f"Trying scraping strategy #{_strategy} (from draw call #{min_drawcall})...")
-        relevant_drawcalls, _ = self.findDrawcallBatch(
-            drawcalls[min_drawcall:],
-            first_call,
-            drawcall_prefix,
-            last_call)
-        
-        if not relevant_drawcalls:
-            return self.extractRelevantCalls(drawcalls, _strategy=_strategy+1)
-
-        if capture_type == "Mapy CZ" and not self.hasUniform(relevant_drawcalls[0], "_uMV"):
-            return self.extractRelevantCalls(drawcalls, _strategy=_strategy+1)
-
-        if capture_type == "Google Earth (single)":
-            if not self.hasUniform(relevant_drawcalls[0], "_uMeshToWorldMatrix"):
+        print(f"Trying scraping strategy #{_strategy}...")
+        if _strategy == 9:
+            relevant_drawcalls = skipped_drawcalls
+            if not relevant_drawcalls:
+                print("relevant_drawcalls empty")
+        else:
+            relevant_drawcalls, _ = self.findDrawcallBatch(
+                drawcalls[min_drawcall:],
+                first_call,
+                drawcall_prefix,
+                last_call)
+            if not relevant_drawcalls:
+                print("relevant_drawcalls empty")
                 return self.extractRelevantCalls(drawcalls, _strategy=_strategy+1)
-            else:
-                capture_type = "Google Earth"
 
-        if capture_type == "Google Earth":
-            relevant_drawcalls = [
-                call for call in relevant_drawcalls
-                if self.hasUniform(call, "_uMeshToWorldMatrix")
-            ]
+            if capture_type == "Mapy CZ" and not self.hasUniform(relevant_drawcalls[0], "_uMV"):
+                return self.extractRelevantCalls(drawcalls, _strategy=_strategy+1)
+
+            if capture_type == "Google Earth (single)":
+                if not self.hasUniform(relevant_drawcalls[0], "_uMeshToWorldMatrix"):
+                    return self.extractRelevantCalls(drawcalls, _strategy=_strategy+1)
+                else:
+                    capture_type = "Google Earth"
+
+            if capture_type == "Google Earth":
+                relevant_drawcalls = [
+                    call for call in relevant_drawcalls
+                    if self.hasUniform(call, "_uMeshToWorldMatrix")
+                ]
 
         return relevant_drawcalls, capture_type
 
@@ -255,9 +269,13 @@ class CaptureScraper():
         else:
             max_drawcall = min(MAX_BLOCKS, len(relevant_drawcalls))
 
+        print(f"max_drawcall {max_drawcall}")
         for drawcallId, draw in enumerate(relevant_drawcalls[:max_drawcall]):
             timer = Timer()
-            #print("Draw call: " + draw.name)
+            print(f"Draw call: {draw.name}, Draw id: {draw.eventId}")
+            if draw.name.startswith('DrawIndexedInstanced'):
+                print("Instanced properties are not supported!")
+                continue
             
             controller.SetFrameEvent(draw.eventId, True)
             state = controller.GetPipelineState()

@@ -31,7 +31,6 @@ from .utils import getBinaryDir, makeTmpDir
 from .preferences import getPreferences
 
 SCRIPT_PATH = os.path.join(os.path.dirname(os.path.realpath(__file__)), "google_maps_rd.py")
-SCRIPT_PATH_EXP = os.path.join(os.path.dirname(os.path.realpath(__file__)), "google_maps_rd_experimental.py")
 
 MSG_CONSOLE_DEBUG_OUTPUT = """\nPlease report to MapsModelsImporter developers providing the full console log with debug information.
 First turn on debug output by activating the "Debug Info"-checkbox under Edit > Preferences > Add-ons > MapsModelsImporter
@@ -62,7 +61,7 @@ MSG_UNKNOWN_ERROR = "Error: An unknown Error occurred!" + MSG_CONSOLE_DEBUG_OUTP
 class MapsModelsImportError(Exception):
     pass
 
-def captureToFiles(context, filepath, prefix, max_blocks, use_experimental):
+def captureToFiles(context, filepath, prefix, max_blocks):
     """Extract binary files and textures from a RenderDoc capture file.
     This spawns a standalone Python interpreter because renderdoc module cannot be loaded in embedded Python"""
     pref = getPreferences(context)
@@ -79,9 +78,8 @@ def captureToFiles(context, filepath, prefix, max_blocks, use_experimental):
     os.environ["PYTHONPATH"] += os.pathsep + os.path.abspath(getBinaryDir())
     os.environ["PYTHONIOENCODING"] = "utf-8"
     os.environ["PATH"] += os.pathsep + os.path.join(python_home, "bin")
-    script_path = SCRIPT_PATH_EXP if use_experimental else SCRIPT_PATH
     try:
-        out = subprocess.check_output([python, script_path, filepath, prefix, str(max_blocks)], stderr=subprocess.STDOUT, text=True)
+        out = subprocess.check_output([python, SCRIPT_PATH, filepath, prefix, str(max_blocks)], stderr=subprocess.STDOUT, text=True)
         if pref.debug_info:
             print("google_maps_rd returned:")
             print(out)
@@ -110,7 +108,7 @@ import bmesh
 import pickle
 from bpy_extras import object_utils
 from math import floor, pi
-from mathutils import Matrix
+from mathutils import Matrix, Quaternion, Vector
 import os
 
 def makeMatrix(mdata):
@@ -123,11 +121,13 @@ def makeMatrix(mdata):
 
 def extractUniforms(constants, refMatrix):
     """Extract from constant buffer the model matrix and uv offset
-    The reference matrix is used to cancel the view part of teh modelview matrix
+    The reference matrix is used to cancel the view part of the modelview matrix
     """
-
+    
     # Extract constants, which have different names depending on the browser/GPU driver
     globUniforms = constants['$Globals']
+
+
     postMatrix = None
     if '_w' in globUniforms and '_s' in globUniforms:
         [ou, ov, su, sv] = globUniforms['_w']
@@ -150,26 +150,26 @@ def extractUniforms(constants, refMatrix):
         matrix = makeMatrix(globUniforms['_uMeshToWorldMatrix'])
         matrix[3] = [0, 0, 0, 1]
         #matrix = makeMatrix(globUniforms['_uModelviewMatrix']) @ matrix
+    elif '_czm_model' in globUniforms:
+        # OneMap
+        print("Reading constants")
+        uvOffsetScale = [0, -1, 1, -1]
+        matrix = makeMatrix(globUniforms['_czm_model'])
+        #matrix[3] = [0, 0, 0, 1]
+        
+        #matrix = makeMatrix(globUniforms['_u_modelViewMatrix'])
+        #matrix = Matrix.Scale(1, 4)
+        
     elif '_uMV' in globUniforms:
         # Mapy CZ
-        _uParams = makeMatrix(globUniforms['_uParams'])
-        #uvOffsetScale = [0, -1, 1, -1]
-        uvOffsetScale = [
-            _uParams[2][2] / _uParams[0][2],
-            (_uParams[3][2] - 1) / _uParams[1][2],
-            _uParams[0][2],
-            -_uParams[1][2],
-        ]
+        uvOffsetScale = [0, -1, 1, -1]
         matrix = makeMatrix(globUniforms['_uMV'])
-
-        """
         postMatrix = Matrix(
             ((0.682889997959137, 0.20221230387687683, 0.7019768357276917, -0.06431722640991211),
             (0.07228320091962814, 0.9375065565109253, -0.3403771221637726, -0.11041564494371414),
             (-0.7269363403320312, 0.28318125009536743, 0.6255972981452942, -1.349690556526184),
             (0.0, 0.0, 0.0, 1.0))
             ) @ Matrix.Scale(500, 4)
-        """
     else:
         if refMatrix is None:
             print("globUniforms:")
@@ -179,11 +179,18 @@ def extractUniforms(constants, refMatrix):
         else:
             return None, None, None
     
-    if refMatrix is None:
+    if refMatrix is None and constants["DrawCall"]["type"] != 'OneMap':
         # Rotate around Y because Google Maps uses X as up axis
         refMatrix = Matrix.Rotation(-pi/2, 4, 'Y') @ matrix.inverted()
-    matrix = refMatrix @ matrix
-
+    
+    elif constants["DrawCall"]["type"] == 'OneMap':
+        # hardcode rotation Quarternion
+        rotationQuaternion = Quaternion((0.120773, 0.001374, 0.992615, 0.01129))
+        refMatrix = rotationQuaternion.to_matrix().to_4x4()
+    
+    
+    #matrix = refMatrix @ matrix
+    
     if postMatrix is not None:
         matrix = postMatrix @ matrix
 
@@ -251,12 +258,12 @@ def loadData(prefix, drawcall_id):
 
     with open("{}{:05d}-constants.bin".format(prefix, drawcall_id), 'rb') as file:
         constants = pickle.load(file)
-
+    print(f"Drawcall id: {drawcall_id}")
     return indices, positions, uvs, img, constants
 
 # -----------------------------------------------------------------------------
 
-def filesToBlender(context, prefix, max_blocks=200, use_experimental=False, globalScale=1.0/256.0):
+def filesToBlender(context, prefix, max_blocks=-1, globalScale=1.0/256.0):
     """Import data from the files extracted by captureToFiles"""
     # Get reference matrix
     refMatrix = None
@@ -264,14 +271,15 @@ def filesToBlender(context, prefix, max_blocks=200, use_experimental=False, glob
     if max_blocks <= 0:
         # If no specific bound, max block is the number of .bin files in the directory
         max_blocks = len([file for file in os.listdir(os.path.dirname(prefix)) if file.endswith(".bin")])
-
+        print(f"max blocks: {max_blocks}")
     drawcall_id = 0
     while drawcall_id < max_blocks:
         if not os.path.isfile("{}{:05d}-indices.bin".format(prefix, drawcall_id)):
             drawcall_id += 1
             continue
-
+        
         timer = Timer()
+        
         try:
             indices, positions, uvs, img, constants = loadData(prefix, drawcall_id)
         except FileNotFoundError as err:
@@ -280,6 +288,11 @@ def filesToBlender(context, prefix, max_blocks=200, use_experimental=False, glob
             continue
         profiling_counters["loadData"].add_sample(timer)
 
+        try:
+            check_global = constants['$Globals']
+        except:
+            drawcall_id += 1
+            continue
         uvOffsetScale, matrix, refMatrix = extractUniforms(constants, refMatrix)
         if uvOffsetScale is None:
             drawcall_id += 1
@@ -299,34 +312,13 @@ def filesToBlender(context, prefix, max_blocks=200, use_experimental=False, glob
 
         if constants["DrawCall"]["type"] == 'Google Maps':
             verts = positions[:,:3] * 256.0 # [ [ p[0] * 256.0, p[1] * 256.0, p[2] * 256.0 ] for p in positions ]
-        elif constants["DrawCall"]["type"] == 'Mapy CZ':
-            raw_verts = positions[:,:3]
-            verts = []
-            globUniforms = constants['$Globals']
-            _uParamsSE = makeMatrix(globUniforms['_uParamsSE'])
-            for v0 in raw_verts:
-                r0 = [0.0, 0.0, 0.0, 0.0]
-                r1 = np.zeros((3,), dtype=np.float32)
-                r2 = np.zeros((3,), dtype=np.float32)
-                r1[0] = v0[0] * _uParamsSE[3][0] + _uParamsSE[0][0]
-                r1[1] = v0[1] * _uParamsSE[0][1] + _uParamsSE[1][0]
-                r1[2] = (v0[2] * _uParamsSE[1][1] + _uParamsSE[2][0]) * _uParamsSE[3][3]
-                r0[1] = np.linalg.norm(r1)
-                r0[2] = r0[1] + 0.0001
-                r0[1] = r0[1] - _uParamsSE[2][3]
-                r0[2] = 1.0 / r0[2]
-                r1 *= r0[2]
-                r0[2] = min(max(r0[1], _uParamsSE[1][2]), _uParamsSE[3][2]) # clamp
-                r0[2] = (r0[2] - _uParamsSE[1][2]) * _uParamsSE[0][3] * _uParamsSE[1][3] + _uParamsSE[2][2]
-                r0[1] = r0[1] * r0[2] - r0[1]
-                r2[0] = v0[0] * _uParamsSE[3][0]
-                r2[1] = v0[1] * _uParamsSE[0][1]
-                r2[2] = v0[2] * _uParamsSE[1][1]
-                r2 += r1 * r0[1]
-                verts.append(r2.tolist())
+        elif constants["DrawCall"]["type"] == 'OneMap':
+            # for OneMap, scale the position by the normConstant to get actual size
+            verts = positions[:,:3] * constants['$Globals']['_gltf_u_dec_position_normConstant'][0]
+            globalScale = 1.0
         else:
             verts = positions[:,:3] # [ [ p[0], p[1], p[2] ] for p in positions ]
-
+            
         [ou, ov, su, sv] = uvOffsetScale
         if uvs is not None and uvs.shape[1] > 2: # len(uvs[0]) > 2:
             uvs = uvs[:,:2] # [u[:2] for u in uvs]
@@ -345,7 +337,11 @@ def filesToBlender(context, prefix, max_blocks=200, use_experimental=False, glob
         timer = Timer()
         obj = addMesh(context, mesh_name, verts, tris, uvs)
         profiling_counters["addMesh"].add_sample(timer)
-        obj.matrix_world = matrix * globalScale
+        translationVector = Vector(constants['$Globals']['_gltf_u_dec_position_min'])
+        
+        
+        obj.matrix_local = matrix #* globalScale
+        #obj.delta_location = translationVector * 1
 
         mat_name = "BuildingMat-{:05d}".format(drawcall_id)
         addImageMaterial(mat_name, obj, img)
@@ -368,7 +364,7 @@ def filesToBlender(context, prefix, max_blocks=200, use_experimental=False, glob
 
 # -----------------------------------------------------------------------------
 
-def importCapture(context, filepath, max_blocks, use_experimental, pref):
+def importCapture(context, filepath, max_blocks, pref):
     prefix = makeTmpDir(pref, filepath)
-    captureToFiles(context, filepath, prefix, max_blocks, use_experimental)
-    filesToBlender(context, prefix, max_blocks, use_experimental)
+    captureToFiles(context, filepath, prefix, max_blocks)
+    filesToBlender(context, prefix, max_blocks)
