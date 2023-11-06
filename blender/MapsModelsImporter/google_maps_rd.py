@@ -76,7 +76,13 @@ class CaptureScraper():
             if has_batch_started:
                 if not draw.name.startswith(drawcall_prefix):
                     if draw.name.startswith(last_call_prefix) and batch != []:
-                        break
+                        # In OneMap, it is possible that the batch gets split by some actions
+                        # So look at the next draw index and check if it is still DrawIndexed
+                        if drawcalls[last_call_index+1].name.startswith(drawcall_prefix):
+                            continue
+                        else:
+                            print(f"{draw.name} matches last call prefix, breaking batch at {last_call_index}")
+                            break
                     else:
                         print("(Skipping drawcall {})".format(draw.name))
                         continue
@@ -199,6 +205,7 @@ class CaptureScraper():
             capture_type = "OneMap"
             min_drawcall = 0
             iteration = 0
+            # Iterate less than 2 to stop the loop because we did not set a last_call
             while iteration < 2:
                 skipped_drawcalls, new_min_drawcall = self.findDrawcallBatch(drawcalls[min_drawcall:], first_call, drawcall_prefix, last_call)
                 min_drawcall += new_min_drawcall
