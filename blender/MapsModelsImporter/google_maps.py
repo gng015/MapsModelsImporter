@@ -157,8 +157,8 @@ def extractUniforms(constants, refMatrix):
         #matrix = makeMatrix(globUniforms['_czm_model'])
         #matrix[3] = [0, 0, 0, 1]
         
-        #matrix = makeMatrix(globUniforms['_u_modelViewMatrix'])
-        matrix = Matrix.Scale(1, 4)
+        matrix = makeMatrix(globUniforms['_u_modelViewMatrix'])
+        #matrix = Matrix.Scale(1, 4)
         
     elif '_uMV' in globUniforms:
         # Mapy CZ
@@ -184,12 +184,17 @@ def extractUniforms(constants, refMatrix):
         refMatrix = Matrix.Rotation(-pi/2, 4, 'Y') @ matrix.inverted()
     
     elif constants["DrawCall"]["type"] == 'OneMap':
-        # hardcode rotation Quarternion
-        rotationQuaternion = Quaternion((0.120773, 0.001374, 0.992615, 0.01129))
+        # obtain rotation Matrix from _u_modelViewMatrix
+        # side note, it is also possible to get the info from _u_normalMatrix, however that info is in 3x3 format while makeMatrix takes in 4x4 
+        viewMatrix = makeMatrix(globUniforms['_u_modelViewMatrix'])
+        # extract only the first 3x3 matrix from the 4x4 matrix because the last column contains the distance info
+        rotationMatrix = Matrix([[1,0,0,0],[0,1,0,0],[0,0,1,0]]) @ viewMatrix @  Matrix([[1,0,0],[0,1,0],[0,0,1],[0,0,0]])
+        #rotationQuaternion = Quaternion((0.120773, 0.001374, 0.992615, 0.01129))
+        rotationQuaternion = rotationMatrix.to_quaternion()
         refMatrix = rotationQuaternion.to_matrix().to_4x4()
     
     
-    matrix = refMatrix @ matrix
+    #matrix = refMatrix @ matrix
     
     if postMatrix is not None:
         matrix = postMatrix @ matrix
@@ -338,7 +343,8 @@ def filesToBlender(context, prefix, max_blocks=-1, globalScale=1.0/256.0):
         obj = addMesh(context, mesh_name, verts, tris, uvs)
         profiling_counters["addMesh"].add_sample(timer)
         translationVector = Vector(constants['$Globals']['_gltf_u_dec_position_min'])
-        rotationQuaternion = Quaternion((0.120773, 0.001374, 0.992615, 0.01129))
+        #rotationQuaternion = Quaternion((0.120773, 0.001374, 0.992615, 0.01129))
+        rotationQuaternion = refMatrix.to_quaternion()
         
         obj.matrix_world = matrix #* globalScale
 
@@ -347,7 +353,7 @@ def filesToBlender(context, prefix, max_blocks=-1, globalScale=1.0/256.0):
         correct_Z = Vector([0,0,rotatedVector[2]])
         #tempVector = rotationQuaternion @ translationVector
         #swapVector = Matrix([(1,0,0),(0,-1,0),(0,0,1)]) @ tempVector
-        obj.delta_location = correct_Z
+        obj.delta_location = rotatedVector
         
         mat_name = "BuildingMat-{:05d}".format(drawcall_id)
         addImageMaterial(mat_name, obj, img)
