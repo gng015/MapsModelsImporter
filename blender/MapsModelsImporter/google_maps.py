@@ -343,16 +343,17 @@ def filesToBlender(context, prefix, max_blocks=-1, globalScale=1.0/256.0):
         obj = addMesh(context, mesh_name, verts, tris, uvs)
         profiling_counters["addMesh"].add_sample(timer)
         translationVector = Vector(constants['$Globals']['_gltf_u_dec_position_min'])
-        #rotationQuaternion = Quaternion((0.120773, 0.001374, 0.992615, 0.01129))
+
+                
         rotationQuaternion = refMatrix.to_quaternion()
+
         
-        obj.matrix_world = matrix #* globalScale
+        obj.matrix_world = matrix * globalScale
 
         rotatedVector = rotationQuaternion @ translationVector
         print(f'BuildingMesh-{drawcall_id}: {rotatedVector}')
         correct_Z = Vector([0,0,rotatedVector[2]])
-        #tempVector = rotationQuaternion @ translationVector
-        #swapVector = Matrix([(1,0,0),(0,-1,0),(0,0,1)]) @ tempVector
+        
         obj.delta_location = rotatedVector
         
         mat_name = "BuildingMat-{:05d}".format(drawcall_id)
