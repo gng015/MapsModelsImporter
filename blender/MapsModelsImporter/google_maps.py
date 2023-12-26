@@ -150,7 +150,7 @@ def extractUniforms(constants, refMatrix):
         matrix = makeMatrix(globUniforms['_uMeshToWorldMatrix'])
         matrix[3] = [0, 0, 0, 1]
         #matrix = makeMatrix(globUniforms['_uModelviewMatrix']) @ matrix
-    elif '_czm_model' in globUniforms:
+    elif '_czm_pass' in globUniforms:
         # OneMap
         print("Reading constants")
         uvOffsetScale = [0, -1, 1, -1]
