@@ -117,7 +117,7 @@ def makeMatrix(mdata):
         mdata[4:8],
         mdata[8:12],
         mdata[12:16]
-    ]).transposed()
+    ]).transposed() 
 
 def extractUniforms(constants, refMatrix):
     """Extract from constant buffer the model matrix and uv offset
@@ -152,14 +152,10 @@ def extractUniforms(constants, refMatrix):
         #matrix = makeMatrix(globUniforms['_uModelviewMatrix']) @ matrix
     elif '_czm_pass' in globUniforms:
         # OneMap
+        # use modelviewmatrix to position the objects
         print("Reading constants")
         uvOffsetScale = [0, -1, 1, -1]
-        #matrix = makeMatrix(globUniforms['_czm_model'])
-        #matrix[3] = [0, 0, 0, 1]
-        
         matrix = makeMatrix(globUniforms['_u_modelViewMatrix'])
-        #matrix = Matrix.Scale(1, 4)
-        
     elif '_uMV' in globUniforms:
         # Mapy CZ
         uvOffsetScale = [0, -1, 1, -1]
@@ -189,9 +185,7 @@ def extractUniforms(constants, refMatrix):
         viewMatrix = makeMatrix(globUniforms['_u_modelViewMatrix'])
         # extract only the first 3x3 matrix from the 4x4 matrix because the last column contains the distance info
         rotationMatrix = Matrix([[1,0,0,0],[0,1,0,0],[0,0,1,0]]) @ viewMatrix @  Matrix([[1,0,0],[0,1,0],[0,0,1],[0,0,0]])
-        #rotationQuaternion = Quaternion((0.120773, 0.001374, 0.992615, 0.01129))
-        rotationQuaternion = rotationMatrix.to_quaternion()
-        refMatrix = rotationQuaternion.to_matrix().to_4x4()
+        refMatrix = rotationMatrix.to_4x4()
     
     
     #matrix = refMatrix @ matrix
@@ -199,6 +193,7 @@ def extractUniforms(constants, refMatrix):
     if postMatrix is not None:
         matrix = postMatrix @ matrix
 
+        
     return uvOffsetScale, matrix, refMatrix
 
 def addMesh(context, name, verts, tris, uvs):
@@ -235,8 +230,8 @@ def addImageMaterial(name, obj, img):
         link = links.new(texture_node.outputs[0], principled.inputs[0])
 
 def numpyLoad(file):
-    (dim,) = np.fromfile(file, dtype=np.int, count=1)
-    shape = np.fromfile(file, dtype=np.int, count=dim)
+    (dim,) = np.fromfile(file, dtype=int, count=1)
+    shape = np.fromfile(file, dtype=int, count=dim)
     dt = np.dtype(file.read(2).decode('ascii'))
     array = np.fromfile(file, dtype=dt)
     array = array.reshape(shape)
@@ -294,7 +289,10 @@ def filesToBlender(context, prefix, max_blocks=-1, globalScale=1.0/256.0):
         profiling_counters["loadData"].add_sample(timer)
 
         try:
-            check_global = constants['$Globals']
+            if constants['DrawCall']['type'] == 'OneMap':
+                check_global = constants['$Globals']['_czm_pass']
+            else:
+                check_global = constants['$Globals']
         except:
             drawcall_id += 1
             continue
@@ -343,8 +341,6 @@ def filesToBlender(context, prefix, max_blocks=-1, globalScale=1.0/256.0):
         obj = addMesh(context, mesh_name, verts, tris, uvs)
         profiling_counters["addMesh"].add_sample(timer)
         translationVector = Vector(constants['$Globals']['_gltf_u_dec_position_min'])
-
-                
         rotationQuaternion = refMatrix.to_quaternion()
 
         
@@ -352,7 +348,6 @@ def filesToBlender(context, prefix, max_blocks=-1, globalScale=1.0/256.0):
 
         rotatedVector = rotationQuaternion @ translationVector
         print(f'BuildingMesh-{drawcall_id}: {rotatedVector}')
-        correct_Z = Vector([0,0,rotatedVector[2]])
         
         obj.delta_location = rotatedVector
         
