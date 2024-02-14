@@ -187,8 +187,8 @@ def extractUniforms(constants, refMatrix):
         rotationMatrix = Matrix([[1,0,0,0],[0,1,0,0],[0,0,1,0]]) @ viewMatrix @  Matrix([[1,0,0],[0,1,0],[0,0,1],[0,0,0]])
         refMatrix = rotationMatrix.to_4x4()
     
-    
-    #matrix = refMatrix @ matrix
+    # refMatrix cancels out the view part in matrix, this gives the original coordinates
+    # matrix = refMatrix.inverted() @ matrix
     
     if postMatrix is not None:
         matrix = postMatrix @ matrix
@@ -350,6 +350,8 @@ def filesToBlender(context, prefix, max_blocks=-1, globalScale=1.0/256.0):
         print(f'BuildingMesh-{drawcall_id}: {rotatedVector}')
         
         obj.delta_location = rotatedVector
+        # original world coordinates
+        # obj.delta_location = translationVector
         
         mat_name = "BuildingMat-{:05d}".format(drawcall_id)
         addImageMaterial(mat_name, obj, img)
